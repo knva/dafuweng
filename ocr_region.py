@@ -5,7 +5,7 @@ import os
 import io
 import time
 
-COORDS = (1156, 654, 1210, 688)  # (left, top, right, bottom)
+COORDS = (1056, 524, 1250, 688)  # (left, top, right, bottom)
 
 
 def get_ocr_reader():
@@ -224,16 +224,22 @@ def ocr(image_bytes: bytes) -> tuple[bool, str]:
             if '自' in text and "动"in text and not has_special_event:
                 print("检测到'自动'二字，跳过AI分析，等待下一轮...")
                 return True, msginfo
+            elif "掠夺了你的金库" in msginfo:
+                print("检测到'掠夺了你的金库'，跳过AI分析，等待下一轮...")
+                return True,""
+            elif "拜访" in msginfo:
+                print("检测到'拜访城市'，跳过AI分析，等待下一轮...")
+                return True,""
             else:
-                timestamp = int(time.time())
-                save_dir = "screenshots"
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir)
-                save_path = f"{save_dir}/{timestamp}-{msginfo[:2]}.png"
+                # timestamp = int(time.time())
+                # save_dir = "screenshots"
+                # if not os.path.exists(save_dir):
+                #     os.makedirs(save_dir)
+                # save_path = f"{save_dir}/{timestamp}-{msginfo[:2]}.png"
                 
-                with open(save_path, "wb") as f:
-                    f.write(image_bytes)
-                print(f"Screenshot saved to {save_path}")
+                # with open(save_path, "wb") as f:
+                #     f.write(image_bytes)
+                # print(f"Screenshot saved to {save_path}")
                 return False, msginfo
 
     except Exception as e:

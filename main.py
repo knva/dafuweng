@@ -1,6 +1,7 @@
 from playwright.sync_api import sync_playwright
 import time
 import threading
+import msvcrt
 import google.generativeai as genai
 import base64
 import re
@@ -215,19 +216,13 @@ def decide_fixed_action(msginfo: str, viewport_width: int, viewport_height: int)
     
     # Keyword detection (case insensitive) -> Action
     msginfo = msginfo.strip()
-    
-    # 1. 猜拳 (Rock-Paper-Scissors) -> Random
-    if "猜拳" in msginfo or '擂台' in msginfo:
-        # Options: 剪刀(555,650), 石头(635,650), 布(715,650)
-        options = [
-            {"name": "剪刀", "x": 555, "y": 650},
-            {"name": "石头", "x": 635, "y": 650},
-            {"name": "布", "x": 715, "y": 650}
-        ]
-        choice = random.choice(options)
-        print(f"Fixed Action: Detected '猜拳', choosing Random -> {choice['name']}")
-        return {"x": choice['x'], "y": choice['y'], "task": "猜拳-随机"}
-
+        
+    # 3. 愿望 (Wish) -> Single Click
+    if "愿望" in msginfo:
+        # 455,450
+        print(f"Fixed Action: Detected '愿望', executing fixed click.")
+        return {"x": 455, "y": 450, "task": "愿望-固定"}
+ 
     # 2. 攻击 (Attack) -> Fixed Sequence
     if "攻击" in msginfo:
         # 308,227; 427,127; 319,463
@@ -240,12 +235,7 @@ def decide_fixed_action(msginfo: str, viewport_width: int, viewport_height: int)
                 (319, 463)
             ]
         }
-    
-    # 3. 愿望 (Wish) -> Single Click
-    if "愿望" in msginfo:
-        # 455,450
-        print(f"Fixed Action: Detected '愿望', executing fixed click.")
-        return {"x": 455, "y": 450, "task": "愿望-固定"}
+
         
     # 4. 掠夺 (Loot) -> Fixed Sequence
     if "掠夺" in msginfo:
@@ -262,9 +252,40 @@ def decide_fixed_action(msginfo: str, viewport_width: int, viewport_height: int)
             ]
         }
         
+   # 1. 猜拳 (Rock-Paper-Scissors) -> Random
+    if "猜拳" in msginfo or '擂台' in msginfo:
+        # Options: 剪刀(555,650), 石头(635,650), 布(715,650)
+        options = [
+            {"name": "剪刀", "x": 555, "y": 650},
+            {"name": "石头", "x": 635, "y": 650},
+            {"name": "布", "x": 715, "y": 650}
+        ]
+        choice = random.choice(options)
+        print(f"Fixed Action: Detected '猜拳', choosing Random -> {choice['name']}")
+        return {"x": choice['x'], "y": choice['y'], "task": "猜拳-随机"}
 
 
     return None
+
+class AutomationState:
+    paused = False
+
+def keyboard_listener():
+    """监听键盘输入，控制暂停/恢复"""
+    while True:
+        if msvcrt.kbhit():
+            # 读取按键，不回显
+            try:
+                key = msvcrt.getch()
+                # 检查是否是 'p' 键 (支持大小写)
+                if key.lower() == b'p':
+                    AutomationState.paused = not AutomationState.paused
+                    state = "暂停" if AutomationState.paused else "恢复"
+                    print(f"\n[系统] 自动化已{state}。再次按下 'P' 键继续...")
+            except Exception:
+                pass
+        time.sleep(0.1)
+
 
 def main(browser_type="chromium"):
     print("Starting DA FU WENG (大富翁) automation...")
@@ -300,12 +321,20 @@ def main(browser_type="chromium"):
             print("="*50 + "\n")
             input()
             
+            # 启动键盘监听线程
+            threading.Thread(target=keyboard_listener, daemon=True).start()
+
             print("开始自动化循环，每秒截图一次。按 Ctrl+C 停止。")
+            print("【提示】运行过程中按 'P' 键可以暂停/恢复自动化。")
             
             loop_count = 0
             last_task = None  # Track last task (no duplicate suppression)
             
             while True:
+                if AutomationState.paused:
+                    time.sleep(0.5)
+                    continue
+
                 loop_count += 1
 
                     # Capture screenshot to memory (bytes)
