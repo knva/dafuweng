@@ -221,7 +221,7 @@ def ocr(image_bytes: bytes) -> tuple[bool, str]:
             if text == "" and msginfo == "":
                 print("无有效数据，跳过AI分析")
                 return True, msginfo
-            if '自' in text and "动"in text and not has_special_event and "长按" not in text:
+            if '自' in text and "动"in text and not has_special_event and "长按" not in text and "以" not in text:
                 print("检测到'自动'二字，跳过AI分析，等待下一轮...")
                 return True, msginfo
             elif "掠夺了你的金库" in msginfo:
