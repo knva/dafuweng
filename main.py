@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
 import time
+import threading
 import google.generativeai as genai
 import base64
 import re
@@ -42,6 +43,51 @@ def convert_coordinates(base_x: int, base_y: int, current_width: int, current_he
     print(f"坐标转换: ({base_x},{base_y}) -> ({new_x},{new_y}) [缩放: {scale_x:.2f}x{scale_y:.2f}]")
     return new_x, new_y
 
+def draw_click_indicator(page, x, y, color):
+    """在屏幕上绘制点击指示器（线程运行）"""
+    try:
+        page.evaluate(f"""
+            (function() {{
+                // Remove old indicator if exists
+                const old = document.getElementById('click-indicator');
+                if (old) old.remove();
+                
+                // Create new indicator
+                const div = document.createElement('div');
+                div.id = 'click-indicator';
+                div.style.cssText = `
+                    position: fixed;
+                    left: {x - 15}px;
+                    top: {y - 15}px;
+                    width: 30px;
+                    height: 30px;
+                    border: 3px solid rgb({color});
+                    border-radius: 50%;
+                    background: rgba({color}, 0.3);
+                    pointer-events: none;
+                    z-index: 999999;
+                    animation: pulse 0.5s ease-out;
+                `;
+                document.body.appendChild(div);
+                
+                // Add pulse animation
+                const style = document.createElement('style');
+                style.textContent = `
+                    @keyframes pulse {{
+                        0% {{ transform: scale(1); opacity: 1; }}
+                        100% {{ transform: scale(2); opacity: 0; }}
+                    }}
+                `;
+                document.head.appendChild(style);
+                
+                // Remove after 2 seconds
+                setTimeout(() => div.remove(), 2000);
+            }})();
+        """)
+    except Exception as e:
+        print(f"绘制指示器失败: {e}")
+
+
 
 GAME_PROMPT_TEMPLATE = """你是一个游戏自动化助手，帮我玩大富翁游戏。
 
@@ -55,7 +101,7 @@ GAME_PROMPT_TEMPLATE = """你是一个游戏自动化助手，帮我玩大富翁
 - 猜拳选项（剪刀(555,650)/石头(635,650)/布(715,650)）
 - 攻击城市轰炸目标（队列点击：308,227;427,127;319,463）
 - 愿望选择(直接点击：455,450)
-- 掠夺钱箱（队列点击：325,420;447,405;587,434）
+- 掠夺钱箱（队列点击：227,420;327,420;447,405;587,434;697,420）
 - 蛋糕塔，点击左上角返回
 
 严格按JSON格式回复，必须包含task字段标识任务类型：
@@ -159,6 +205,66 @@ def decide_action_with_ai(image_bytes, viewport_width, viewport_height):
         print(f"AI Request failed: {e}")
     
     return None
+    
+def decide_fixed_action(msginfo: str, viewport_width: int, viewport_height: int) -> dict:
+    """Based on OCR text (msginfo), return a fixed action if applicable."""
+    if not msginfo:
+        return None
+        
+    import random
+    
+    # Keyword detection (case insensitive) -> Action
+    msginfo = msginfo.strip()
+    
+    # 1. 猜拳 (Rock-Paper-Scissors) -> Random
+    if "猜拳" in msginfo or '擂台' in msginfo:
+        # Options: 剪刀(555,650), 石头(635,650), 布(715,650)
+        options = [
+            {"name": "剪刀", "x": 555, "y": 650},
+            {"name": "石头", "x": 635, "y": 650},
+            {"name": "布", "x": 715, "y": 650}
+        ]
+        choice = random.choice(options)
+        print(f"Fixed Action: Detected '猜拳', choosing Random -> {choice['name']}")
+        return {"x": choice['x'], "y": choice['y'], "task": "猜拳-随机"}
+
+    # 2. 攻击 (Attack) -> Fixed Sequence
+    if "攻击" in msginfo:
+        # 308,227; 427,127; 319,463
+        print(f"Fixed Action: Detected '攻击', executing fixed sequence.")
+        return {
+            "task": "攻击-固定",
+            "clicks": [
+                (308, 227),
+                (427, 127),
+                (319, 463)
+            ]
+        }
+    
+    # 3. 愿望 (Wish) -> Single Click
+    if "愿望" in msginfo:
+        # 455,450
+        print(f"Fixed Action: Detected '愿望', executing fixed click.")
+        return {"x": 455, "y": 450, "task": "愿望-固定"}
+        
+    # 4. 掠夺 (Loot) -> Fixed Sequence
+    if "掠夺" in msginfo:
+        # 227,420; 327,420; 447,405; 587,434; 697,420
+        print(f"Fixed Action: Detected '掠夺', executing fixed sequence.")
+        return {
+            "task": "掠夺-固定",
+            "clicks": [
+                 (227, 420),
+                 (327, 420),
+                 (447, 405),
+                 (587, 434),
+                 (697, 420)
+            ]
+        }
+        
+
+
+    return None
 
 def main(browser_type="chromium"):
     print("Starting DA FU WENG (大富翁) automation...")
@@ -210,14 +316,23 @@ def main(browser_type="chromium"):
                 viewport = page.viewport_size
                 vw, vh = viewport['width'], viewport['height']
 
-                # 检查截图区域是否存在"自动"二字
-                if ocr(image_bytes):
+                # 检查截图区域是否存在"自动"二字, 并获取OCR信息
+                # ocr() returns (bool, str) -> (is_auto, msginfo)
+                is_auto, msginfo = ocr(image_bytes)
+                
+                if is_auto:
                     print("检测到'自动'模式，跳过AI分析，等待下一轮...")
                     time.sleep(1)
                     continue
 
-                # Get coordinates from AI (pass bytes, not a file)
-                coords = decide_action_with_ai(image_bytes, vw, vh)
+                # 优先检查是否存在固定逻辑 (Attack, Wish, Loot, RPS, etc.)
+                fixed_coords = decide_fixed_action(msginfo, vw, vh)
+                if fixed_coords:
+                     print(f"Fixed action triggered: {fixed_coords.get('task')}")
+                     coords = fixed_coords
+                else:
+                    # Get coordinates from AI (pass bytes, not a file)
+                    coords = decide_action_with_ai(image_bytes, vw, vh)
                 
                 if coords:
                     current_task = coords.get("task", "unknown")
@@ -230,7 +345,12 @@ def main(browser_type="chromium"):
                         print("No action needed, waiting...")
                         time.sleep(1)
                         continue
-                    
+                    image_bytes = page.screenshot()
+                    ena,msginfo = ocr(image_bytes)
+                    if ena:
+                        print("检测到'自动'模式，跳过点击，等待下一轮...")
+                        time.sleep(1)
+                        continue
                     # Handle multi-click
                     if "clicks" in coords:
                         clicks = coords["clicks"]
@@ -239,16 +359,16 @@ def main(browser_type="chromium"):
                             # 坐标转换
                             cx, cy = convert_coordinates(cx, cy, vw, vh)
                             print(f"  [{i+1}/{len(clicks)}] Clicking at ({cx}, {cy})")
+                            
+                            # Draw indicator
+                            draw_click_indicator(page, cx, cy, "255, 0, 0")
+                            
                             page.mouse.click(cx, cy)
                             time.sleep(1)  # 1 second interval between clicks
                         # Wait before next iteration
                         time.sleep(10)
                         continue
-                    image_bytes = page.screenshot()
-                    if ocr(image_bytes):
-                        print("检测到'自动'模式，跳过点击，等待下一轮...")
-                        time.sleep(1)
-                        continue
+             
                     # Handle single click or hold
                     x = coords["x"]
                     y = coords["y"]
@@ -263,47 +383,11 @@ def main(browser_type="chromium"):
                     
                     # Draw click indicator on page (green for hold, red for click)
                     indicator_color = "0, 255, 0" if hold else "255, 0, 0"
-                    page.evaluate(f"""
-                        (function() {{
-                            // Remove old indicator if exists
-                            const old = document.getElementById('click-indicator');
-                            if (old) old.remove();
-                            
-                            // Create new indicator
-                            const div = document.createElement('div');
-                            div.id = 'click-indicator';
-                            div.style.cssText = `
-                                position: fixed;
-                                left: {x - 15}px;
-                                top: {y - 15}px;
-                                width: 30px;
-                                height: 30px;
-                                border: 3px solid rgb({indicator_color});
-                                border-radius: 50%;
-                                background: rgba({indicator_color}, 0.3);
-                                pointer-events: none;
-                                z-index: 999999;
-                                animation: pulse 0.5s ease-out;
-                            `;
-                            document.body.appendChild(div);
-                            
-                            // Add pulse animation
-                            const style = document.createElement('style');
-                            style.textContent = `
-                                @keyframes pulse {{
-                                    0% {{ transform: scale(1); opacity: 1; }}
-                                    100% {{ transform: scale(2); opacity: 0; }}
-                                }}
-                            `;
-                            document.head.appendChild(style);
-                            
-                            // Remove after 2 seconds
-                            setTimeout(() => div.remove(), 2000);
-                        }})();
-                    """)
                     
-                    time.sleep(0.3)  # Brief pause to show indicator
-                    
+                    # Use thread to draw indicator to avoid blocking
+                    # Playwright sync API is not thread safe, calling directly (it's fast enough without sleep)
+                    draw_click_indicator(page, x, y, indicator_color)
+               
                     if hold:
                         # Long press: hold for 3 seconds
                         page.mouse.move(x, y)
