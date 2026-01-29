@@ -301,6 +301,13 @@ def main(browser_type="chromium"):
                 headless=False,
                 channel="msedge"
             )
+        elif browser_type.lower() == "remote":
+            print("连接远程浏览器 (ws://localhost:9222)")
+            browser = p.chromium.connect_over_cdp("ws://localhost:9222")
+            if browser.contexts:
+                context = browser.contexts[0]
+            else:
+                context = browser.new_context()
         else:
             user_data_dir = "./browser_data"
             print("使用 Chromium 浏览器")
@@ -440,7 +447,7 @@ def main(browser_type="chromium"):
 if __name__ == "__main__":
     # 解析命令行参数
     parser = argparse.ArgumentParser(description='大富翁游戏自动化')
-    parser.add_argument('--browser', type=str, choices=['chromium', 'edge'], default='chromium',
+    parser.add_argument('--browser', type=str, choices=['chromium', 'edge', 'remote'], default='chromium',
                         help='浏览器类型 (默认: chromium)')
     args = parser.parse_args()
 
